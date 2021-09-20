@@ -206,6 +206,9 @@ function getTransactionStatus(events, status) {
   if (status.isBroadcast) {
     return "NotReady";
   } 
+  if(status.isRetracted) {
+    return "NotReady";
+  }
   if (status.isInBlock || status.isFinalized) {
     if(events.filter(e => e.event.data.method === 'ExtrinsicFailed').length > 0) {
       return "Fail";
