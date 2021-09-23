@@ -1,43 +1,77 @@
 const { ApiPromise, WsProvider, Keyring } = require('@polkadot/api');
 const delay = require('delay');
-const config = require('./config');
+const config = require('./config').getConfig();
 const { decodeAddress, encodeAddress } = require('@polkadot/util-crypto');
 const { v4: uuidv4 } = require('uuid');
 const {addMarketFeeToPrice, subtractMarketFeeFromTotal} = require('./market_fee');
 const BigNumber = require('./big_number');
 
-const WITHDRAW_TYPE_UNUSED = 0;
-const WITHDRAW_TYPE_MATCHED = 1;
-
-
 const { Client } = require('pg');
-let dbClient = null;
 
-const incomingTxTable = "QuoteIncomingTransaction";
-const outgoingTxTable = "QuoteOutgoingTransaction";
-const kusamaBlocksTable = "KusamaProcessedBlock";
+const pgTables = {
+  incomingTx: 'QuoteIncomingTransaction',
+  outgoingTx: 'QuoteOutgoingTransaction',
+  kusamaBlocks: 'KusamaProcessedBlock'
+}
+const withdrawTypes = {
+  TYPE_UNUSED: 0,
+  TYPE_MATCHED: 1
+}
+const logStatus = {
+  ERROR: 'ERROR',
+  RECEIVED: 'RECEIVED',
+  FAILED: 'FAILED',
+  INFO: 'INFO'
+}
+const transactionStatus = {
+  STATUS_NOT_READY: 'NotReady',
+  STATUS_FAIL: 'Fail',
+  STATUS_SUCCESS: 'Success'
+};
+const kusamaBlockMethods = {
+  METHOD_TRANSFER_KEEP_ALIVE: 'transferKeepAlive',
+  METHOD_TRANSFER: 'transfer'
+}
+const healthState = {
+  STATE_TRANSACTION: 'in_transaction',
+  STATE_IDLE: 'idle'
+}
+
+let dbClient = null;
 let adminAddress;
 
+let healthCheck = {
+  lastAction: 0,
+  state: healthState.STATE_IDLE
+}
+healthCheck.updateState = (state = healthState.STATE_IDLE, onlyState=false) => {
+  if(!onlyState) healthCheck.lastAction = (new Date()).getTime();
+  if(healthCheck.state !== state) log(`Process state changed to ${state}`, logStatus.INFO);
+  healthCheck.state = state;
+}
+
+function addLeadZero(num) {
+  if(num < 10) return `0${num}`;
+  return `${num}`;
+}
+
 function getTime() {
-  var a = new Date();
-  var hour = a.getHours();
-  var min = a.getMinutes();
-  var sec = a.getSeconds();
-  var time = `${hour}:${min}:${sec}`;
-  return time;
+  let a = new Date(), hour = addLeadZero(a.getHours()), min = addLeadZero(a.getMinutes()), sec = addLeadZero(a.getSeconds());
+  return `${hour}:${min}:${sec}`;
 }
 
 function getDay() {
-  var a = new Date();
-  var year = a.getFullYear();
-  var month = a.getMonth()+1;
-  var date = a.getDate();
-  var time = `${year}-${month}-${date}`;
-  return time;
+  let a = new Date(), year = a.getFullYear(), month = addLeadZero(a.getMonth() + 1), date = addLeadZero(a.getDate());
+  return `${year}-${month}-${date}`;
 }
 
 function log(operation, status = "") {
   console.log(`${getDay()} ${getTime()}: ${operation}${status.length > 0?',':''}${status}`);
+}
+
+function terminateProcess() {
+  // TODO: maybe some other actions to do before termination
+  process.exit(1);
 }
 
 async function getKusamaConnection() {
@@ -48,12 +82,12 @@ async function getKusamaConnection() {
   const api = new ApiPromise({ provider: wsProvider });
 
   api.on('disconnected', async (value) => {
-    log(`disconnected: ${value}`, "ERROR");
-    process.exit();
+    log(`disconnected: ${value}`, logStatus.ERROR);
+    terminateProcess();
   });
   api.on('error', async (value) => {
-    log(`error: ${value}`, "ERROR");
-    process.exit();
+    log(`error: ${value}`, logStatus.ERROR);
+    terminateProcess();
   });
 
   await api.isReady;
@@ -71,6 +105,10 @@ async function getDbConnection() {
       port: config.dbPort
     });
     dbClient.connect();
+    dbClient.on('error', err => {
+      log(`Postgres server error: ${err}`, logStatus.ERROR);
+      terminateProcess();
+    });
     log("Connected to the DB");
   }
   return dbClient;
@@ -78,9 +116,8 @@ async function getDbConnection() {
 
 async function getLastHandledKusamaBlock(api) {
   const conn = await getDbConnection();
-  const res = await conn.query(`SELECT * FROM public."${kusamaBlocksTable}" ORDER BY public."${kusamaBlocksTable}"."BlockNumber" DESC LIMIT 1;`)
-  const lastBlock = (res.rows.length > 0) ? res.rows[0].BlockNumber : await getStartingBlock(api);
-  return lastBlock;
+  const res = await conn.query(`SELECT * FROM public."${pgTables.kusamaBlocks}" ORDER BY public."${pgTables.kusamaBlocks}"."BlockNumber" DESC LIMIT 1;`);
+  return (res.rows.length > 0) ? res.rows[0].BlockNumber : await getStartingBlock(api);
 }
 
 async function getStartingBlock(api) {
@@ -95,7 +132,7 @@ async function getStartingBlock(api) {
 
 async function addHandledKusamaBlock(blockNumber) {
   const conn = await getDbConnection();
-  await conn.query(`INSERT INTO public."${kusamaBlocksTable}" VALUES ($1, now());`, [blockNumber]);
+  await conn.query(`INSERT INTO public."${pgTables.kusamaBlocks}" VALUES ($1, now());`, [blockNumber]);
 }
 
 function toHexString(byteArray) {
@@ -112,7 +149,7 @@ async function addIncomingKusamaTransaction(amount, address, blockNumber) {
   // Convert address into public key
   const publicKey = toHexString(decodeAddress(address));
 
-  await conn.query(`INSERT INTO public."${incomingTxTable}"("Id", "Amount", "QuoteId", "Description", "AccountPublicKey", "BlockId", "Status", "LockTime", "ErrorMessage") VALUES ($1, $2, 2, \'\', $3, $4, 0, null, null);`, 
+  await conn.query(`INSERT INTO public."${pgTables.incomingTx}"("Id", "Amount", "QuoteId", "Description", "AccountPublicKey", "BlockId", "Status", "LockTime", "ErrorMessage") VALUES ($1, $2, 2, \'\', $3, $4, 0, null, null);`,
     [uuidv4(), amount, publicKey, blockNumber]);
 }
 
@@ -120,7 +157,7 @@ async function setOutgoingKusamaTransactionStatus(id, status, error = "OK") {
   const conn = await getDbConnection();
 
   // Get one non-processed Kusama transaction
-  await conn.query(`UPDATE public."${outgoingTxTable}" SET "Status" = $1, "ErrorMessage" = $2 WHERE public."${outgoingTxTable}"."Id" = $3`, 
+  await conn.query(`UPDATE public."${pgTables.outgoingTx}" SET "Status" = $1, "ErrorMessage" = $2 WHERE public."${pgTables.outgoingTx}"."Id" = $3`,
     [status, error, id]);
 }
 
@@ -128,7 +165,7 @@ async function getOutgoingKusamaTransaction() {
   const conn = await getDbConnection();
 
   // Get one non-processed Kusama transaction
-  const res = await conn.query(`SELECT * FROM public."${outgoingTxTable}" WHERE public."${outgoingTxTable}"."Status" = 0 AND public."${outgoingTxTable}"."QuoteId" = 2 LIMIT 1`);
+  const res = await conn.query(`SELECT * FROM public."${pgTables.outgoingTx}" WHERE public."${pgTables.outgoingTx}"."Status" = 0 AND public."${pgTables.outgoingTx}"."QuoteId" = 2 LIMIT 1`);
 
   let ksmTx = {
     id: '',
@@ -144,17 +181,17 @@ async function getOutgoingKusamaTransaction() {
     try {
       // Convert public key into address
       const address = encodeAddress(publicKey);
-      
+
       ksmTx.id = res.rows[0].Id;
       ksmTx.recipient = address;
       ksmTx.amount = res.rows[0].Value;
       ksmTx.withdrawType = res.rows[0].WithdrawType;
     }
     catch (e) {
-      setOutgoingKusamaTransactionStatus(res.rows[0].Id, 2, e.toString());
-      log(e, "ERROR");
+      await setOutgoingKusamaTransactionStatus(res.rows[0].Id, 2, e.toString());
+      log(e, logStatus.ERROR);
     }
-    
+
   }
 
   return ksmTx;
@@ -162,26 +199,26 @@ async function getOutgoingKusamaTransaction() {
 
 
 async function scanKusamaBlock(api, blockNum) {
-  if (blockNum % 10 == 0) log(`Scanning Block #${blockNum}`);
+  if (blockNum % 10 === 0) log(`Scanning Block #${blockNum}`);
   const blockHash = await api.rpc.chain.getBlockHash(blockNum);
 
   const signedBlock = await api.rpc.chain.getBlock(blockHash);
   const allRecords = await api.query.system.events.at(blockHash);
 
-  await signedBlock.block.extrinsics.forEach(async (ex, index) => {
+  let processBlock = async (ex, index) => {
     let { _isSigned, _meta, method: { args, method, section } } = ex;
-    if (method == "transferKeepAlive") method = "transfer";
-    if ((section == "balances") && (method == "transfer") && (args[0] == adminAddress)) {
+    if (method === kusamaBlockMethods.METHOD_TRANSFER_KEEP_ALIVE) method = kusamaBlockMethods.METHOD_TRANSFER;
+    if ((section === "balances") && (method === kusamaBlockMethods.METHOD_TRANSFER) && (args[0] === adminAddress)) {
       const events = allRecords
-        .filter(({ phase }) =>
+        .filter(({phase}) =>
           phase.isApplyExtrinsic &&
           phase.asApplyExtrinsic.eq(index)
         )
-        .map(({ event }) => `${event.section}.${event.method}`);
+        .map(({event}) => `${event.section}.${event.method}`);
 
       if (events.includes('system.ExtrinsicSuccess')) {
-        log(`Quote deposit in block ${blockNum} from ${ex.signer.toString()} amount ${args[1]}`, "RECEIVED");
-  
+        log(`Quote deposit in block ${blockNum} from ${ex.signer.toString()} amount ${args[1]}`, logStatus.RECEIVED);
+
         // Register Quote Deposit (save to DB)
         const amount = args[1];
         const address = ex.signer.toString();
@@ -189,36 +226,36 @@ async function scanKusamaBlock(api, blockNum) {
         const amountMinusFee = subtractMarketFeeFromTotal(new BigNumber(amount), BigNumber.ROUND_UP);
 
         await addIncomingKusamaTransaction(amountMinusFee.toString(), address, blockNum);
+      } else {
+        log(`Quote deposit from ${ex.signer.toString()} amount ${args[1]}`, logStatus.FAILED);
       }
-      else {
-        log(`Quote deposit from ${ex.signer.toString()} amount ${args[1]}`, "FAILED");
-      }
-  
     }
-  });
+  }
+
+  await signedBlock.block.extrinsics.forEach(processBlock);
 
 }
 
 function getTransactionStatus(events, status) {
   if (status.isReady) {
-    return "NotReady";
+    return transactionStatus.STATUS_NOT_READY;
   }
   if (status.isBroadcast) {
-    return "NotReady";
-  } 
+    return transactionStatus.STATUS_NOT_READY;
+  }
   if(status.isRetracted) {
-    return "NotReady";
+    return transactionStatus.STATUS_NOT_READY;
   }
   if (status.isInBlock || status.isFinalized) {
     if(events.filter(e => e.event.data.method === 'ExtrinsicFailed').length > 0) {
-      return "Fail";
+      return transactionStatus.STATUS_FAIL;
     }
     if(events.filter(e => e.event.data.method === 'ExtrinsicSuccess').length > 0) {
-      return "Success";
+      return transactionStatus.STATUS_SUCCESS;
     }
   }
 
-  return "Fail";
+  return transactionStatus.STATUS_FAIL;
 }
 
 function sendTxAsync(sender, transaction) {
@@ -227,18 +264,18 @@ function sendTxAsync(sender, transaction) {
       let unsub = await transaction.signAndSend(sender, ({ events = [], status }) => {
         const transactionStatus = getTransactionStatus(events, status);
 
-        if (transactionStatus === "Success") {
+        if (transactionStatus === transactionStatus.STATUS_SUCCESS) {
           log(`Transaction successful`);
           resolve(events);
           unsub();
-        } else if (transactionStatus === "Fail") {
+        } else if (transactionStatus === transactionStatus.FAILED) {
           log(`Something went wrong with transaction. Status: ${status}`);
           reject(events);
           unsub();
         }
       });
     } catch (e) {
-      log('Error: ' + e.toString(), "ERROR");
+      log('Error: ' + e.toString(), logStatus.ERROR);
       reject(e);
     }
   });
@@ -246,7 +283,7 @@ function sendTxAsync(sender, transaction) {
 
 async function withdrawAsync(api, sender, recipient, amount, withdrawType) {
   let amountBN = new BigNumber(amount);
-  if (withdrawType == WITHDRAW_TYPE_UNUSED) {
+  if (parseInt(withdrawType) === withdrawTypes.TYPE_UNUSED) {
     return withdrawUnused(api, sender, recipient, amountBN);
   }
 
@@ -282,8 +319,66 @@ async function transfer(api, sender, recipient, amountBN) {
   await sendTxAsync(sender, balanceTransaction);
 }
 
-async function handleKusama() {
+async function catchUpWithBlocks(api) {
+  const finalizedHash = await api.rpc.chain.getFinalizedHead();
+  const signedFinalizedBlock = await api.rpc.chain.getBlock(finalizedHash);
+  while (true) {
+    let success = true;
+    try {
 
+      // Get the last processed block
+      let lastKusamaBlock = parseInt(await getLastHandledKusamaBlock(api));
+
+      if (lastKusamaBlock + 1 <= parseInt(`${signedFinalizedBlock.block.header.number}`)) {
+        lastKusamaBlock++;
+
+        // Handle Kusama Deposits (by analysing block transactions)
+        await scanKusamaBlock(api, lastKusamaBlock);
+        await addHandledKusamaBlock(lastKusamaBlock);
+
+      } else break;
+
+    } catch (ex) {
+      log(ex, logStatus.ERROR);
+      success = false;
+      await delay(1000);
+    }
+
+    if(success) healthCheck.updateState();
+  }
+}
+
+async function handleQueuedWithdrawals(api, admin) {
+  let withdrawal = false;
+  do {
+    withdrawal = false;
+    const ksmTx = await getOutgoingKusamaTransaction();
+    if (ksmTx.id.length > 0) {
+      withdrawal = true;
+
+      try {
+        // Handle withdrawals by type (withdraw or match )
+        let withdrawType = ksmTx.withdrawType;
+        let amountReturned = new BigNumber(ksmTx.amount);
+
+        healthCheck.updateState(healthState.STATE_TRANSACTION, true);
+
+        // Set status before handling (safety measure)
+        await setOutgoingKusamaTransactionStatus(ksmTx.id, 1);
+        await withdrawAsync(api, admin, ksmTx.recipient, amountReturned.toString(), withdrawType);
+      }
+      catch (e) {
+        await setOutgoingKusamaTransactionStatus(ksmTx.id, 2, e);
+      }
+      finally {
+        healthCheck.updateState(healthState.STATE_IDLE, true);
+        log(`Quote withdraw: ${ksmTx.recipient.toString()} withdarwing amount ${ksmTx.amount}`, "END");
+      }
+    }
+  } while (withdrawal);
+}
+
+async function handleKusama() {
   const api = await getKusamaConnection();
   const keyring = new Keyring({ type: 'sr25519', addressPrefix: 2 });
   keyring.setSS58Format(2);
@@ -294,59 +389,38 @@ async function handleKusama() {
   // Work indefinitely
   while (true) {
     // 1. Catch up with blocks
-    const finalizedHash = await api.rpc.chain.getFinalizedHead();
-    const signedFinalizedBlock = await api.rpc.chain.getBlock(finalizedHash);
-    while (true) {
-      try {
-        // Get the last processed block
-        let lastKusamaBlock = parseInt(await getLastHandledKusamaBlock(api));
+    await catchUpWithBlocks(api);
 
-        if (lastKusamaBlock + 1 <= parseInt(signedFinalizedBlock.block.header.number)) {
-          lastKusamaBlock++;
+    healthCheck.updateState();
 
-          // Handle Kusama Deposits (by analysing block transactions)
-          await scanKusamaBlock(api, lastKusamaBlock);
-          await addHandledKusamaBlock(lastKusamaBlock);
-        } else break;
-
-      } catch (ex) {
-        log(ex, "ERROR");
-        await delay(1000);
-      }
-    }
+    await delay(1000);
 
     // 2. Handle queued withdrawals
-    let withdrawal = false;
-    do {
-      withdrawal = false;
-      const ksmTx = await getOutgoingKusamaTransaction();
-      if (ksmTx.id.length > 0) {
-        withdrawal = true;
+    await handleQueuedWithdrawals(api, admin);
 
-        try {
-          // Handle withdrawals by type (withdraw or match )
-          let withdrawType = ksmTx.withdrawType;
-          let amountBN = new BigNumber(ksmTx.amount);
-          let amountReturned = amountBN;
-
-          // Set status before handling (safety measure)
-          await setOutgoingKusamaTransactionStatus(ksmTx.id, 1);
-          await withdrawAsync(api, admin, ksmTx.recipient, amountReturned.toString(), withdrawType);
-        }
-        catch (e) {
-          await setOutgoingKusamaTransactionStatus(ksmTx.id, 2, e);
-        }
-        finally {
-          log(`Quote withdraw: ${ksmTx.recipient.toString()} withdarwing amount ${ksmTx.amount}`, "END");
-        }
-      }
-    } while (withdrawal);
+    healthCheck.updateState();
 
     await delay(1000);
   }
 }
 
+const checkHealth = () => {
+  let now = (new Date()).getTime();
+  let isTimeout = healthCheck.lastAction < (now - (config.healthCheckMaxTimeout * 1000));
+  if(isTimeout) {
+    if(healthCheck.state === healthState.STATE_TRANSACTION) {
+      log('Process still in transaction', logStatus.INFO);
+      return;
+    }
+    // Process in idle state, but updates stopped (Maybe we lost some connections)
+    if(!config.disableHealthCheck) terminateProcess();
+    else log('Process currently in unhealthy state');
+  }
+}
+
 async function main() {
+  healthCheck.updateState();
+  setInterval(checkHealth, 5 * 1000);
   await handleKusama();
 }
 
