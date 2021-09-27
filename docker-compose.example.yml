@@ -1,0 +1,33 @@
+version: "3.5"
+
+services:
+  escrow-kusama-postgres:
+    image: postgres:13.4-alpine
+    container_name: escrow-kusama-postgres
+    environment:
+      POSTGRES_DB: 'escrow-kusama'
+      POSTGRES_USER: 'escrow-kusama'
+      POSTGRES_PASSWORD: 'test'
+      POSTGRES_PORT: '5432'
+      POSTGRES_INITDB_ARGS: "--auth-local=trust"
+    ports:
+      - 5432:5432
+    volumes:
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+      - ../postgresql/escrow-kusama:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro
+
+  escrow-kusama-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: escrow-kusama-node
+    container_name: escrow-kusama-node
+    environment:
+      ADMIN_SEED: '//Alice'
+      DB_HOST: 'escrow-kusama-postgres'
+      DB_NAME: 'escrow-kusama'
+      DB_USER: 'escrow-kusama'
+      DB_PASSWORD: 'test'
+      START_FROM_BLOCK: 'current'
+      HEATHCHECK_MAX_TIMEOUT: '300'
