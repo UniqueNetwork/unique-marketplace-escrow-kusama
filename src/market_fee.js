@@ -1,4 +1,4 @@
-const BigNumber = require('./big_number');
+const BigNumber = require('./lib').util.BigNumber;
 const FEE = new BigNumber(0.1);
 const totalToPriceRatio = FEE.plus(1);
 

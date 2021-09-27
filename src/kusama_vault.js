@@ -4,7 +4,9 @@ const config = require('./config').getConfig();
 const { decodeAddress, encodeAddress } = require('@polkadot/util-crypto');
 const { v4: uuidv4 } = require('uuid');
 const {addMarketFeeToPrice, subtractMarketFeeFromTotal} = require('./market_fee');
-const BigNumber = require('./big_number');
+const {util, constants, logging} = require('./lib');
+const log = logging.log;
+const BigNumber = util.BigNumber;
 
 const { Client } = require('pg');
 
@@ -17,24 +19,9 @@ const withdrawTypes = {
   TYPE_UNUSED: 0,
   TYPE_MATCHED: 1
 }
-const logStatus = {
-  ERROR: 'ERROR',
-  RECEIVED: 'RECEIVED',
-  FAILED: 'FAILED',
-  INFO: 'INFO'
-}
-const transactionStatus = {
-  STATUS_NOT_READY: 'NotReady',
-  STATUS_FAIL: 'Fail',
-  STATUS_SUCCESS: 'Success'
-};
 const kusamaBlockMethods = {
   METHOD_TRANSFER_KEEP_ALIVE: 'transferKeepAlive',
   METHOD_TRANSFER: 'transfer'
-}
-const healthState = {
-  STATE_TRANSACTION: 'in_transaction',
-  STATE_IDLE: 'idle'
 }
 
 let dbClient = null;
@@ -42,36 +29,12 @@ let adminAddress;
 
 let healthCheck = {
   lastAction: 0,
-  state: healthState.STATE_IDLE
+  state: constants.healthState.STATE_IDLE
 }
-healthCheck.updateState = (state = healthState.STATE_IDLE, onlyState=false) => {
+healthCheck.updateState = (state = constants.healthState.STATE_IDLE, onlyState=false) => {
   if(!onlyState) healthCheck.lastAction = (new Date()).getTime();
-  if(healthCheck.state !== state) log(`Process state changed to ${state}`, logStatus.INFO);
+  if(healthCheck.state !== state) log(`Process state changed to ${state}`, logging.status.INFO);
   healthCheck.state = state;
-}
-
-function addLeadZero(num) {
-  if(num < 10) return `0${num}`;
-  return `${num}`;
-}
-
-function getTime() {
-  let a = new Date(), hour = addLeadZero(a.getHours()), min = addLeadZero(a.getMinutes()), sec = addLeadZero(a.getSeconds());
-  return `${hour}:${min}:${sec}`;
-}
-
-function getDay() {
-  let a = new Date(), year = a.getFullYear(), month = addLeadZero(a.getMonth() + 1), date = addLeadZero(a.getDate());
-  return `${year}-${month}-${date}`;
-}
-
-function log(operation, status = "") {
-  console.log(`${getDay()} ${getTime()}: ${operation}${status.length > 0?',':''}${status}`);
-}
-
-function terminateProcess() {
-  // TODO: maybe some other actions to do before termination
-  process.exit(1);
 }
 
 async function getKusamaConnection() {
@@ -82,12 +45,12 @@ async function getKusamaConnection() {
   const api = new ApiPromise({ provider: wsProvider });
 
   api.on('disconnected', async (value) => {
-    log(`disconnected: ${value}`, logStatus.ERROR);
-    terminateProcess();
+    log(`disconnected: ${value}`, logging.status.ERROR);
+    util.terminateProcess();
   });
   api.on('error', async (value) => {
-    log(`error: ${value}`, logStatus.ERROR);
-    terminateProcess();
+    log(`error: ${value}`, logging.status.ERROR);
+    util.terminateProcess();
   });
 
   await api.isReady;
@@ -106,8 +69,8 @@ async function getDbConnection() {
     });
     dbClient.connect();
     dbClient.on('error', err => {
-      log(`Postgres server error: ${err}`, logStatus.ERROR);
-      terminateProcess();
+      log(`Postgres server error: ${err}`, logging.status.ERROR);
+      util.terminateProcess();
     });
     log("Connected to the DB");
   }
@@ -189,7 +152,7 @@ async function getOutgoingKusamaTransaction() {
     }
     catch (e) {
       await setOutgoingKusamaTransactionStatus(res.rows[0].Id, 2, e.toString());
-      log(e, logStatus.ERROR);
+      log(e, logging.status.ERROR);
     }
 
   }
@@ -217,7 +180,7 @@ async function scanKusamaBlock(api, blockNum) {
         .map(({event}) => `${event.section}.${event.method}`);
 
       if (events.includes('system.ExtrinsicSuccess')) {
-        log(`Quote deposit in block ${blockNum} from ${ex.signer.toString()} amount ${args[1]}`, logStatus.RECEIVED);
+        log(`Quote deposit in block ${blockNum} from ${ex.signer.toString()} amount ${args[1]}`, logging.status.RECEIVED);
 
         // Register Quote Deposit (save to DB)
         const amount = args[1];
@@ -227,7 +190,7 @@ async function scanKusamaBlock(api, blockNum) {
 
         await addIncomingKusamaTransaction(amountMinusFee.toString(), address, blockNum);
       } else {
-        log(`Quote deposit from ${ex.signer.toString()} amount ${args[1]}`, logStatus.FAILED);
+        log(`Quote deposit from ${ex.signer.toString()} amount ${args[1]}`, logging.status.FAILED);
       }
     }
   }
@@ -238,24 +201,24 @@ async function scanKusamaBlock(api, blockNum) {
 
 function getTransactionStatus(events, status) {
   if (status.isReady) {
-    return transactionStatus.STATUS_NOT_READY;
+    return constants.transactionStatus.STATUS_NOT_READY;
   }
   if (status.isBroadcast) {
-    return transactionStatus.STATUS_NOT_READY;
+    return constants.transactionStatus.STATUS_NOT_READY;
   }
   if(status.isRetracted) {
-    return transactionStatus.STATUS_NOT_READY;
+    return constants.transactionStatus.STATUS_NOT_READY;
   }
   if (status.isInBlock || status.isFinalized) {
     if(events.filter(e => e.event.data.method === 'ExtrinsicFailed').length > 0) {
-      return transactionStatus.STATUS_FAIL;
+      return constants.transactionStatus.STATUS_FAIL;
     }
     if(events.filter(e => e.event.data.method === 'ExtrinsicSuccess').length > 0) {
-      return transactionStatus.STATUS_SUCCESS;
+      return constants.transactionStatus.STATUS_SUCCESS;
     }
   }
 
-  return transactionStatus.STATUS_FAIL;
+  return constants.transactionStatus.STATUS_FAIL;
 }
 
 function sendTxAsync(sender, transaction) {
@@ -264,18 +227,18 @@ function sendTxAsync(sender, transaction) {
       let unsub = await transaction.signAndSend(sender, ({ events = [], status }) => {
         const transactionStatus = getTransactionStatus(events, status);
 
-        if (transactionStatus === transactionStatus.STATUS_SUCCESS) {
+        if (transactionStatus === constants.transactionStatus.STATUS_SUCCESS) {
           log(`Transaction successful`);
           resolve(events);
           unsub();
-        } else if (transactionStatus === transactionStatus.FAILED) {
+        } else if (transactionStatus === constants.transactionStatus.FAILED) {
           log(`Something went wrong with transaction. Status: ${status}`);
           reject(events);
           unsub();
         }
       });
     } catch (e) {
-      log('Error: ' + e.toString(), logStatus.ERROR);
+      log('Error: ' + e.toString(), logging.status.ERROR);
       reject(e);
     }
   });
@@ -339,7 +302,7 @@ async function catchUpWithBlocks(api) {
       } else break;
 
     } catch (ex) {
-      log(ex, logStatus.ERROR);
+      log(ex, logging.status.ERROR);
       success = false;
       await delay(1000);
     }
@@ -361,7 +324,7 @@ async function handleQueuedWithdrawals(api, admin) {
         let withdrawType = ksmTx.withdrawType;
         let amountReturned = new BigNumber(ksmTx.amount);
 
-        healthCheck.updateState(healthState.STATE_TRANSACTION, true);
+        healthCheck.updateState(constants.healthState.STATE_TRANSACTION, true);
 
         // Set status before handling (safety measure)
         await setOutgoingKusamaTransactionStatus(ksmTx.id, 1);
@@ -371,7 +334,7 @@ async function handleQueuedWithdrawals(api, admin) {
         await setOutgoingKusamaTransactionStatus(ksmTx.id, 2, e);
       }
       finally {
-        healthCheck.updateState(healthState.STATE_IDLE, true);
+        healthCheck.updateState(constants.healthState.STATE_IDLE, true);
         log(`Quote withdraw: ${ksmTx.recipient.toString()} withdarwing amount ${ksmTx.amount}`, "END");
       }
     }
@@ -408,12 +371,12 @@ const checkHealth = () => {
   let now = (new Date()).getTime();
   let isTimeout = healthCheck.lastAction < (now - (config.healthCheckMaxTimeout * 1000));
   if(isTimeout) {
-    if(healthCheck.state === healthState.STATE_TRANSACTION) {
-      log('Process still in transaction', logStatus.INFO);
+    if(healthCheck.state === constants.healthState.STATE_TRANSACTION) {
+      log('Process still in transaction', logging.status.INFO);
       return;
     }
     // Process in idle state, but updates stopped (Maybe we lost some connections)
-    if(!config.disableHealthCheck) terminateProcess();
+    if(!config.disableHealthCheck) util.terminateProcess();
     else log('Process currently in unhealthy state');
   }
 }
