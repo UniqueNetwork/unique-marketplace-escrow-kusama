@@ -231,7 +231,7 @@ function sendTxAsync(sender, transaction) {
           log(`Transaction successful`);
           resolve(events);
           unsub();
-        } else if (transactionStatus === constants.transactionStatus.FAILED) {
+        } else if (transactionStatus === constants.transactionStatus.STATUS_FAIL) {
           log(`Something went wrong with transaction. Status: ${status}`);
           reject(events);
           unsub();
@@ -247,22 +247,23 @@ function sendTxAsync(sender, transaction) {
 async function withdrawAsync(api, sender, recipient, amount, withdrawType) {
   let amountBN = new BigNumber(amount);
   if (parseInt(withdrawType) === withdrawTypes.TYPE_UNUSED) {
-    return withdrawUnused(api, sender, recipient, amountBN);
+    await withdrawUnused(api, sender, recipient, amountBN);
   }
-
-  return withdrawMatched(api, sender, recipient, amountBN);
+  else {
+    await withdrawMatched(api, sender, recipient, amountBN);
+  }
 }
 
-function withdrawMatched(api, sender, recipient, amountBN) {
-  log(`Quote withdraw matched: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`, "START");
-  return transfer(api, sender, recipient, amountBN);
+async function withdrawMatched(api, sender, recipient, amountBN) {
+  log(`Quote withdraw matched: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`,"START");
+  await transfer(api, sender, recipient, amountBN);
 }
 
-function withdrawUnused(api, sender, recipient, amountBN) {
+async function withdrawUnused(api, sender, recipient, amountBN) {
     // Withdraw unused => return commission
     amountBN = addMarketFeeToPrice(amountBN, BigNumber.ROUND_DOWN);
     log(`Quote withdraw unused: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`, "START");
-    return transfer(api, sender, recipient, amountBN);
+    await transfer(api, sender, recipient, amountBN);
 }
 
 
