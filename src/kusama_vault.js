@@ -160,7 +160,6 @@ async function getOutgoingKusamaTransaction() {
   return ksmTx;
 }
 
-
 async function scanKusamaBlock(api, blockNum) {
   if (blockNum % 10 === 0) log(`Scanning Block #${blockNum}`);
   const blockHash = await api.rpc.chain.getBlockHash(blockNum);
@@ -171,7 +170,7 @@ async function scanKusamaBlock(api, blockNum) {
   let processBlock = async (ex, index) => {
     let { _isSigned, _meta, method: { args, method, section } } = ex;
     if (method === kusamaBlockMethods.METHOD_TRANSFER_KEEP_ALIVE) method = kusamaBlockMethods.METHOD_TRANSFER;
-    if ((section === "balances") && (method === kusamaBlockMethods.METHOD_TRANSFER) && (args[0] === adminAddress)) {
+    if ((section === "balances") && (method === kusamaBlockMethods.METHOD_TRANSFER) && (args[0].toString() === adminAddress)) {
       const events = allRecords
         .filter(({phase}) =>
           phase.isApplyExtrinsic &&

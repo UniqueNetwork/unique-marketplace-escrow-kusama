@@ -1,5 +1,5 @@
 module.exports = {
-  wsEndpoint : 'wss://kusama-rpc.polkadot.io',
+  wsEndpoint : process.env.KUSAMA_WS_ENDPOINT || 'wss://kusama-rpc.polkadot.io',
 
   adminSeed : process.env.ADMIN_SEED || '//Alice',
 
