@@ -24,6 +24,7 @@ services:
     image: escrow-kusama-node
     container_name: escrow-kusama-node
     environment:
+      KUSAMA_WS_ENDPOINT: 'wss://kusama-rpc.polkadot.io'
       ADMIN_SEED: '//Alice'
       DB_HOST: 'escrow-kusama-postgres'
       DB_NAME: 'escrow-kusama'

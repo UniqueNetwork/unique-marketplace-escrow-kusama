@@ -160,7 +160,6 @@ async function getOutgoingKusamaTransaction() {
   return ksmTx;
 }
 
-
 async function scanKusamaBlock(api, blockNum) {
   if (blockNum % 10 === 0) log(`Scanning Block #${blockNum}`);
   const blockHash = await api.rpc.chain.getBlockHash(blockNum);
@@ -171,7 +170,7 @@ async function scanKusamaBlock(api, blockNum) {
   let processBlock = async (ex, index) => {
     let { _isSigned, _meta, method: { args, method, section } } = ex;
     if (method === kusamaBlockMethods.METHOD_TRANSFER_KEEP_ALIVE) method = kusamaBlockMethods.METHOD_TRANSFER;
-    if ((section === "balances") && (method === kusamaBlockMethods.METHOD_TRANSFER) && (args[0] === adminAddress)) {
+    if ((section === "balances") && (method === kusamaBlockMethods.METHOD_TRANSFER) && (args[0].toString() === adminAddress)) {
       const events = allRecords
         .filter(({phase}) =>
           phase.isApplyExtrinsic &&
@@ -231,7 +230,7 @@ function sendTxAsync(sender, transaction) {
           log(`Transaction successful`);
           resolve(events);
           unsub();
-        } else if (transactionStatus === constants.transactionStatus.FAILED) {
+        } else if (transactionStatus === constants.transactionStatus.STATUS_FAIL) {
           log(`Something went wrong with transaction. Status: ${status}`);
           reject(events);
           unsub();
@@ -247,22 +246,23 @@ function sendTxAsync(sender, transaction) {
 async function withdrawAsync(api, sender, recipient, amount, withdrawType) {
   let amountBN = new BigNumber(amount);
   if (parseInt(withdrawType) === withdrawTypes.TYPE_UNUSED) {
-    return withdrawUnused(api, sender, recipient, amountBN);
+    await withdrawUnused(api, sender, recipient, amountBN);
   }
-
-  return withdrawMatched(api, sender, recipient, amountBN);
+  else {
+    await withdrawMatched(api, sender, recipient, amountBN);
+  }
 }
 
-function withdrawMatched(api, sender, recipient, amountBN) {
-  log(`Quote withdraw matched: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`, "START");
-  return transfer(api, sender, recipient, amountBN);
+async function withdrawMatched(api, sender, recipient, amountBN) {
+  log(`Quote withdraw matched: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`,"START");
+  await transfer(api, sender, recipient, amountBN);
 }
 
-function withdrawUnused(api, sender, recipient, amountBN) {
+async function withdrawUnused(api, sender, recipient, amountBN) {
     // Withdraw unused => return commission
     amountBN = addMarketFeeToPrice(amountBN, BigNumber.ROUND_DOWN);
     log(`Quote withdraw unused: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`, "START");
-    return transfer(api, sender, recipient, amountBN);
+    await transfer(api, sender, recipient, amountBN);
 }
 
 
