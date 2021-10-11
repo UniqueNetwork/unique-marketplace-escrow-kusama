@@ -26,6 +26,7 @@ services:
     environment:
       KUSAMA_WS_ENDPOINT: 'wss://kusama-rpc.polkadot.io'
       ADMIN_SEED: '//Alice'
+      COMMISSION: '10'
       DB_HOST: 'escrow-kusama-postgres'
       DB_NAME: 'escrow-kusama'
       DB_USER: 'escrow-kusama'
