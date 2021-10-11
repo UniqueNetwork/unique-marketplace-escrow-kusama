@@ -10,7 +10,7 @@ module.exports = {
   dbPassword : process.env.DB_PASSWORD || '12345',
 
   startFromBlock : process.env.START_FROM_BLOCK || 'current', // Either block number or 'current' to start from current block.
-  marketCommission: parseFloat(process.env.COMMISSION || '10'), // Percents
+  marketCommission: parseInt(process.env.COMMISSION || '10'), // Percents
   healthCheckMaxTimeout : parseInt(process.env.HEATHCHECK_MAX_TIMEOUT || (5 * 60)),
   inTesting: false,
   disableHealthCheck: false
