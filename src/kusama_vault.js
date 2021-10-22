@@ -343,8 +343,7 @@ async function handleQueuedWithdrawals(api, admin) {
 
 async function handleKusama() {
   const api = await getKusamaConnection();
-  const keyring = new Keyring({ type: 'sr25519', addressPrefix: 2 });
-  keyring.setSS58Format(2);
+  const keyring = new Keyring({ type: 'sr25519', ss58Format: config.ss58Format });
   const admin = keyring.addFromUri(config.adminSeed);
   adminAddress = admin.address.toString();
   log(`Escrow admin address: ${adminAddress}`);
