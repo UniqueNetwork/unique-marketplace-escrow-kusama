@@ -31,5 +31,6 @@ services:
       DB_NAME: 'escrow-kusama'
       DB_USER: 'escrow-kusama'
       DB_PASSWORD: 'test'
+      SS58_FORMAT: '2'
       START_FROM_BLOCK: 'current'
       HEATHCHECK_MAX_TIMEOUT: '300'
