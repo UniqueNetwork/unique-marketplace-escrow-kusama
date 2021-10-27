@@ -9,7 +9,7 @@ module.exports = {
   dbUser : process.env.DB_USER || 'marketplace',
   dbPassword : process.env.DB_PASSWORD || '12345',
 
-  startFromBlock : process.env.START_FROM_BLOCK || 'current', // Either block number or 'current' to start from current block.
+  startFromBlock : `${process.env.START_FROM_BLOCK || 'current'}`, // Either block number or 'current' to start from current block.
   ss58Format: parseInt(process.env.SS58_FORMAT || '2'),  // Kusama address format
   marketCommission: parseInt(process.env.COMMISSION || '10'), // Percents
   healthCheckMaxTimeout : parseInt(process.env.HEATHCHECK_MAX_TIMEOUT || (5 * 60)),
