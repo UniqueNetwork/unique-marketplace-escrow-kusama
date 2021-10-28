@@ -25,7 +25,11 @@ const kusamaBlockMethods = {
 }
 
 let dbClient = null;
-let adminAddress;
+
+let stateStore = {
+  adminAddress: null,
+  startBlockInitialized: false
+}
 
 let healthCheck = {
   lastAction: 0,
@@ -78,15 +82,19 @@ async function getDbConnection() {
 }
 
 async function getLastHandledKusamaBlock(api) {
-  const conn = await getDbConnection();
-  const res = await conn.query(`SELECT * FROM public."${pgTables.kusamaBlocks}" ORDER BY public."${pgTables.kusamaBlocks}"."BlockNumber" DESC LIMIT 1;`);
-  return (res.rows.length > 0) ? res.rows[0].BlockNumber : await getStartingBlock(api);
+  if(stateStore.startBlockInitialized || config.startFromBlock.toLocaleLowerCase() !== 'latest') {
+    const conn = await getDbConnection();
+    const res = await conn.query(`SELECT * FROM public."${pgTables.kusamaBlocks}" ORDER BY public."${pgTables.kusamaBlocks}"."BlockNumber" DESC LIMIT 1;`);
+    if (res.rows.length > 0) return res.rows[0].BlockNumber;
+  }
+  return await getStartingBlock(api);
 }
 
 async function getStartingBlock(api) {
-  if('current'.localeCompare(config.startFromBlock, undefined, {sensitivity: 'accent'}) === 0) {
+  if(['current', 'latest'].indexOf(config.startFromBlock.toLocaleLowerCase()) > -1) {
     const head = await api.rpc.chain.getHeader();
     const block = head.number.toNumber();
+    stateStore.startBlockInitialized = true;
     return block - 10; // start 10 blocks behind
   }
 
@@ -170,7 +178,7 @@ async function scanKusamaBlock(api, blockNum) {
   let processBlock = async (ex, index) => {
     let { _isSigned, _meta, method: { args, method, section } } = ex;
     if (method === kusamaBlockMethods.METHOD_TRANSFER_KEEP_ALIVE) method = kusamaBlockMethods.METHOD_TRANSFER;
-    if ((section === "balances") && (method === kusamaBlockMethods.METHOD_TRANSFER) && (args[0].toString() === adminAddress)) {
+    if ((section === "balances") && (method === kusamaBlockMethods.METHOD_TRANSFER) && (args[0].toString() === stateStore.adminAddress)) {
       const events = allRecords
         .filter(({phase}) =>
           phase.isApplyExtrinsic &&
@@ -345,8 +353,8 @@ async function handleKusama() {
   const api = await getKusamaConnection();
   const keyring = new Keyring({ type: 'sr25519', ss58Format: config.ss58Format });
   const admin = keyring.addFromUri(config.adminSeed);
-  adminAddress = admin.address.toString();
-  log(`Escrow admin address: ${adminAddress}`);
+  stateStore.adminAddress = admin.address.toString();
+  log(`Escrow admin address: ${stateStore.adminAddress}`);
 
   // Work indefinitely
   while (true) {
