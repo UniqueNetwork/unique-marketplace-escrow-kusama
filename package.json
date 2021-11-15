@@ -1,18 +1,9 @@
 {
   "name": "kusamaescrow",
-  "version": "1.0.0",
+  "version": "0.7",
   "description": "KSM escrow for the marketplace",
-  "main": "",
-  "directories": {
-    "test": "test"
-  },
-  "devDependencies": {},
-  "scripts": {
-    "test": ""
-  },
-  "author": "",
+  "author": "Unique Network",
   "license": "Apache 2.0",
-  "homepage": "",
   "dependencies": {
     "@polkadot/api": "6.5.2",
     "bignumber.js": "^9.0.0",
@@ -20,16 +11,5 @@
     "fs": "0.0.1-security",
     "pg": "^8.5.1",
     "uuid": "^8.3.2"
-  },
-  "standard": {
-    "globals": [
-      "it",
-      "assert",
-      "beforeEach",
-      "afterEach",
-      "describe",
-      "contract",
-      "artifacts"
-    ]
   }
 }
