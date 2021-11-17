@@ -21,5 +21,5 @@ The Buyer and the Seller can get back what they sent.
 
 ## How to run
 
-Copy `lib/config.global.js` to `lib/config.dev.js` and edit it, or set env variables. See `docker-compose.example.yml` for details.
+Copy `src/config.global.js` to `src/config.dev.js` and edit it, or set env variables. See `docker-compose.example.yml` for details.
 Run either with `npm install & npm run` or with docker.

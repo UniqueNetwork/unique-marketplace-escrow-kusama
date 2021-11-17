@@ -64,13 +64,7 @@ async function getKusamaConnection() {
 
 async function getDbConnection() {
   if (!dbClient) {
-    dbClient = new Client({
-      user: config.dbUser,
-      host: config.dbHost,
-      database: config.dbName,
-      password: config.dbPassword,
-      port: config.dbPort
-    });
+    dbClient = new Client({connectionString: config.postgresUrl});
     dbClient.connect();
     dbClient.on('error', err => {
       log(`Postgres server error: ${err}`, logging.status.ERROR);
