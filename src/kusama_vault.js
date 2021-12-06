@@ -3,9 +3,8 @@ const delay = require('delay');
 const config = require('./config').getConfig();
 const { decodeAddress, encodeAddress } = require('@polkadot/util-crypto');
 const { v4: uuidv4 } = require('uuid');
-const {addMarketFeeToPrice, subtractMarketFeeFromTotal} = require('./market_fee');
-const {util, constants, logging} = require('./lib');
-const log = logging.log;
+const { addMarketFeeToPrice, subtractMarketFeeFromTotal } = require('./market_fee');
+const { util, constants, logging } = require('./lib');
 const BigNumber = util.BigNumber;
 
 const { Client } = require('pg');
@@ -37,7 +36,7 @@ let healthCheck = {
 }
 healthCheck.updateState = (state = constants.healthState.STATE_IDLE, onlyState=false) => {
   if(!onlyState) healthCheck.lastAction = (new Date()).getTime();
-  if(healthCheck.state !== state) log(`Process state changed to ${state}`, logging.status.INFO);
+  if(healthCheck.state !== state) logging.log(`Process state changed to ${state}`, logging.level.INFO);
   healthCheck.state = state;
 }
 
@@ -48,12 +47,14 @@ async function getKusamaConnection() {
   // Create the API and wait until ready
   const api = new ApiPromise({ provider: wsProvider });
 
-  api.on('disconnected', async (value) => {
-    log(`disconnected: ${value}`, logging.status.ERROR);
+  api.on('disconnected', async value => {
+    logging.log(`WS connection disconnected`, logging.level.ERROR);
+    logging.log(value, logging.level.ERROR);
     util.terminateProcess();
   });
-  api.on('error', async (value) => {
-    log(`error: ${value}`, logging.status.ERROR);
+  api.on('error', async value => {
+    logging.log(`WS connection error`, logging.level.ERROR);
+    logging.log(value, logging.level.ERROR);
     util.terminateProcess();
   });
 
@@ -67,10 +68,11 @@ async function getDbConnection() {
     dbClient = new Client({connectionString: config.postgresUrl});
     dbClient.connect();
     dbClient.on('error', err => {
-      log(`Postgres server error: ${err}`, logging.status.ERROR);
+      logging.log(`Postgres server error`, logging.status.ERROR);
+      logging.log(err, logging.status.ERROR);
       util.terminateProcess();
     });
-    log("Connected to the DB");
+    logging.log("Connected to the DB");
   }
   return dbClient;
 }
@@ -154,7 +156,7 @@ async function getOutgoingKusamaTransaction() {
     }
     catch (e) {
       await setOutgoingKusamaTransactionStatus(res.rows[0].Id, 2, e.toString());
-      log(e, logging.status.ERROR);
+      logging.log(e, logging.status.ERROR);
     }
 
   }
@@ -163,7 +165,7 @@ async function getOutgoingKusamaTransaction() {
 }
 
 async function scanKusamaBlock(api, blockNum) {
-  if (blockNum % 10 === 0) log(`Scanning Block #${blockNum}`);
+  if (blockNum % 10 === 0) logging.log(`Scanning Block #${blockNum}`);
   const blockHash = await api.rpc.chain.getBlockHash(blockNum);
 
   const signedBlock = await api.rpc.chain.getBlock(blockHash);
@@ -181,7 +183,7 @@ async function scanKusamaBlock(api, blockNum) {
         .map(({event}) => `${event.section}.${event.method}`);
 
       if (events.includes('system.ExtrinsicSuccess')) {
-        log(`Quote deposit in block ${blockNum} from ${ex.signer.toString()} amount ${args[1]}`, logging.status.RECEIVED);
+        logging.log(`Quote deposit in block ${blockNum} from ${ex.signer.toString()} amount ${args[1]}`, logging.status.RECEIVED);
 
         // Register Quote Deposit (save to DB)
         const amount = args[1];
@@ -191,7 +193,7 @@ async function scanKusamaBlock(api, blockNum) {
 
         await addIncomingKusamaTransaction(amountMinusFee.toString(), address, blockNum);
       } else {
-        log(`Quote deposit from ${ex.signer.toString()} amount ${args[1]}`, logging.status.FAILED);
+        logging.log(`Quote deposit from ${ex.signer.toString()} amount ${args[1]}`, logging.status.FAILED);
       }
     }
   }
@@ -229,17 +231,18 @@ function sendTxAsync(sender, transaction) {
         const transactionStatus = getTransactionStatus(events, status);
 
         if (transactionStatus === constants.transactionStatus.STATUS_SUCCESS) {
-          log(`Transaction successful`);
+          logging.log(`Transaction successful`);
           resolve(events);
           unsub();
         } else if (transactionStatus === constants.transactionStatus.STATUS_FAIL) {
-          log(`Something went wrong with transaction. Status: ${status}`);
+          logging.log(`Something went wrong with transaction. Status: ${status}`);
           reject(events);
           unsub();
         }
       });
     } catch (e) {
-      log('Error: ' + e.toString(), logging.status.ERROR);
+      logging.log('Error while sending transaction', logging.status.ERROR);
+      logging.log(e, logging.status.ERROR);
       reject(e);
     }
   });
@@ -256,14 +259,14 @@ async function withdrawAsync(api, sender, recipient, amount, withdrawType) {
 }
 
 async function withdrawMatched(api, sender, recipient, amountBN) {
-  log(`Quote withdraw matched: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`,"START");
+  logging.log(`Quote withdraw matched: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`,"START");
   await transfer(api, sender, recipient, amountBN);
 }
 
 async function withdrawUnused(api, sender, recipient, amountBN) {
     // Withdraw unused => return commission
     amountBN = addMarketFeeToPrice(amountBN, BigNumber.ROUND_DOWN);
-    log(`Quote withdraw unused: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`, "START");
+    logging.log(`Quote withdraw unused: ${recipient.toString()} withdarwing amount ${amountBN.toString()}`, "START");
     await transfer(api, sender, recipient, amountBN);
 }
 
@@ -271,12 +274,12 @@ async function withdrawUnused(api, sender, recipient, amountBN) {
 async function transfer(api, sender, recipient, amountBN) {
   const totalBalanceObj = await api.query.system.account(sender.address)
   const totalBalance = new BigNumber(totalBalanceObj.data.free);
-  log(`amountBN = ${amountBN.toString()}`);
-  log(`Total escrow balance = ${totalBalance.toString()}`);
+  logging.log(`amountBN = ${amountBN.toString()}`);
+  logging.log(`Total escrow balance = ${totalBalance.toString()}`);
 
   if (totalBalance.isLessThan(amountBN)) {
     const error = `Escrow balance ${totalBalance.toString()} is insufficient to send ${amountBN.toString()} to ${recipient.toString()}.`;
-    log(error);
+    logging.log(error, logging.level.ERROR);
     throw error;
   }
 
@@ -304,7 +307,7 @@ async function catchUpWithBlocks(api) {
       } else break;
 
     } catch (ex) {
-      log(ex, logging.status.ERROR);
+      logging.log(ex, logging.status.ERROR);
       success = false;
       await delay(1000);
     }
@@ -337,7 +340,7 @@ async function handleQueuedWithdrawals(api, admin) {
       }
       finally {
         healthCheck.updateState(constants.healthState.STATE_IDLE, true);
-        log(`Quote withdraw: ${ksmTx.recipient.toString()} withdarwing amount ${ksmTx.amount}`, "END");
+        logging.log(`Quote withdraw: ${ksmTx.recipient.toString()} withdarwing amount ${ksmTx.amount}`, "END");
       }
     }
   } while (withdrawal);
@@ -348,7 +351,7 @@ async function handleKusama() {
   const keyring = new Keyring({ type: 'sr25519', ss58Format: config.ss58Format });
   const admin = keyring.addFromUri(config.adminSeed);
   stateStore.adminAddress = admin.address.toString();
-  log(`Escrow admin address: ${stateStore.adminAddress}`);
+  logging.log(`Escrow admin address: ${stateStore.adminAddress}`);
 
   // Work indefinitely
   while (true) {
@@ -373,12 +376,12 @@ const checkHealth = () => {
   let isTimeout = healthCheck.lastAction < (now - (config.healthCheckMaxTimeout * 1000));
   if(isTimeout) {
     if(healthCheck.state === constants.healthState.STATE_TRANSACTION) {
-      log('Process still in transaction', logging.status.INFO);
+      logging.log('Process still in transaction', logging.status.INFO);
       return;
     }
     // Process in idle state, but updates stopped (Maybe we lost some connections)
     if(!config.disableHealthCheck) util.terminateProcess();
-    else log('Process currently in unhealthy state');
+    else logging.log('Process currently in unhealthy state');
   }
 }
 
