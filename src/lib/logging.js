@@ -1,17 +1,22 @@
 const util = require('./utility');
 
-const logStatus = {
+const logLevel = {
   ERROR: 'ERROR',
   RECEIVED: 'RECEIVED',
   FAILED: 'FAILED',
   INFO: 'INFO'
 };
 
-function log(operation, status = "") {
-  console.log(`${util.getDate()} ${util.getTime()}: ${operation}${status.length > 0?',':''}${status}`);
+function log(message, level = logLevel.INFO) {
+  if(level === logLevel.ERROR) message = message.stack || message;
+  try {
+    if (typeof message !== 'string') message = JSON.stringify(message);
+  }
+  catch(e) {}
+  console.log(`[${util.getDate()} ${util.getTime()}] ${level}: ${message}`)
 }
 
 
 module.exports = {
-  status: logStatus, log
+  status: logLevel, log, level: logLevel
 };
